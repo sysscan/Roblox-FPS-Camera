@@ -1,3 +1,7 @@
+-- First-person camera controller.
+-- Accumulates raw mouse/gamepad input each frame, converts to yaw/pitch,
+-- and builds a CFrame positioned at the character's eye height.
+
 local UserInputService = game:GetService("UserInputService")
 
 local SENSITIVITY_SCALE = 0.2
@@ -19,6 +23,8 @@ local config: Config = {}
 local cameraYaw = 0
 local cameraPitch = 0
 local lastRootCFrame: CFrame? = nil
+
+-- input is accumulated between frames so nothing gets dropped
 local pendingDeltaX = 0
 local pendingDeltaY = 0
 local connections: { RBXScriptConnection } = {}
@@ -34,6 +40,8 @@ local function getInvertY(): boolean
 	return config.getInvertY and config.getInvertY() or false
 end
 
+-- Snaps yaw/pitch to match the character's current facing.
+-- Called on first frame and after teleports so the camera does not lag behind.
 local function syncFromCharacter(root: BasePart)
 	if not root then return end
 	local look = root.CFrame.LookVector
@@ -44,8 +52,10 @@ local function syncFromCharacter(root: BasePart)
 	lastRootCFrame = root.CFrame
 end
 
+-- Hooks mouse and right-stick input. Safe to call multiple times.
 local function startCapture()
 	if #connections > 0 then return end
+
 	table.insert(connections, UserInputService.InputChanged:Connect(function(input, processed)
 		if processed then return end
 		if input.UserInputType == Enum.UserInputType.MouseMovement then
@@ -53,6 +63,7 @@ local function startCapture()
 			pendingDeltaY += input.Delta.Y
 		end
 	end))
+
 	table.insert(connections, UserInputService.InputChanged:Connect(function(input)
 		if input.UserInputType ~= Enum.UserInputType.Gamepad1 then return end
 		if input.KeyCode ~= Enum.KeyCode.Thumbstick2 then return end
@@ -71,12 +82,16 @@ local function stopCapture()
 	pendingDeltaY = 0
 end
 
+-- Call once per frame. Drains accumulated input, updates yaw/pitch, returns the final camera CFrame.
+-- crouchOffset lowers the eye position when crouching or sliding.
 local function update(root: BasePart?, crouchOffset: number?): CFrame?
 	if not root then return nil end
 	startCapture()
 
 	local rootPos = root.Position
 	local threshold = config.teleportThreshold or TELEPORT_THRESHOLD
+
+	-- resync if this is the first frame or the root jumped far (respawn/teleport)
 	if not lastRootCFrame or (rootPos - lastRootCFrame.Position).Magnitude > threshold then
 		syncFromCharacter(root)
 	end
@@ -90,6 +105,7 @@ local function update(root: BasePart?, crouchOffset: number?): CFrame?
 	local sens = getSensitivity()
 	local pitchSign = getInvertY() and 1 or -1
 	local pitchLimit = config.pitchLimit or PITCH_LIMIT
+
 	cameraYaw -= math.rad(dx * PIXEL_TO_DEGREE * sens)
 	cameraPitch += pitchSign * math.rad(dy * PIXEL_TO_DEGREE * sens)
 	cameraPitch = math.clamp(cameraPitch, -pitchLimit, pitchLimit)
